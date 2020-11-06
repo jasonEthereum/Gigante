@@ -1,0 +1,423 @@
+
+  
+pragma solidity ^0.6.0;
+
+
+/* This contract will distribute funds according to a waterfall. 
+
+
+Admin Fees - 50,000
+Employee Salaries - 125,000
+GovtTaxes - 65,000
+Sr Secured Creditors - 400,000
+Bondholders - 200,000
+The Jr Creditors and the equity have agreed to split any remainder on a 60/40 basis.
+
+
+The contract will first receive funds.  
+The contract will only accept funds from the Liquidation Trustee. 
+The Admin Fees will be paid in full before any funds are distributed to cover Employee Salaries. 
+Then Employee Salaries will be paid in full before any Govt Taxes are paid... and so on. 
+
+After the Bondholders have received payment, funds will be split between the Jr Creditors and the Equity on a 60/40 basis. 
+
+For simplicity, any funds received get paid out entirely.  The contract does not hold on to funds. 
+
+*/
+
+
+
+contract DistributionTrustee {
+//====================================================================================================
+//====================================================================================================
+//
+// 1000 - Initial Setup
+//
+//====================================================================================================
+//====================================================================================================
+
+
+// 1. Global Variables
+address owner;
+uint256 CumulativeReceivedBalance                   = 0;
+uint256 CumulativePaidOutBalance                    = 0;
+uint256 AmtReceived                                 = 0; 
+uint256 ThisReceipt                                 = 0;
+
+
+// 1. The parties
+address payable  AdminFees                          = 0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2;
+address payable  EmployeeSalaries                   = 0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db;
+address payable  GovtTaxes                          = 0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB;
+address payable  SrSecuredCreditors                 = 0x617F2E2fD72FD9D5503197092aC168c91465E7f2;
+address payable  Bondholders                        = 0x17F6AD8Ef982297579C203069C1DbfFE4348c372;
+address payable  JrCreditors                        = 0x5c6B0f7Bf3E7ce046039Bd8FABdfD3f9F5021678;
+address payable  Equity                             = 0x03C6FcED478cBbC9a4FAB34eF9f40767739D1Ff7;
+
+
+// 2. What each party is owed
+// a. Parties with fixed payouts
+uint256 AdminFeesPriorityDistributionAmt            = 5*10**5;  //ie 50k ether
+uint256 EmployeeSalariesPriorityDistributionAmt     = 125*10**5;  //ie 125k ether
+uint256 GovtTaxesPriorityDistributionAmt            = 65*10**5;  //ie 65k ether
+uint256 SrSecuredCreditorsPriorityDistributionAmt   = 400*10**5;  //ie 400k ether
+uint256 BondholdersPriorityDistributionAmt          = 200*10**5;  //ie 200k ether
+
+// b. Parties with variable payouts
+uint256 JrCreditorsShare                            = 60;
+uint256 EquityShare                                 = 40;
+uint256 units                                       = 100;
+
+
+// 3. Other Overhead
+
+//initialize AP Accts with zero balances
+uint256 AdminFeesPayable                            = 0;
+uint256 EmployeeSalariesPayable                     = 0;
+uint256 GovtTaxesPayable                            = 0;
+uint256 SrSecuredCreditorsPayable                   = 0;
+uint256 BondholdersPayable                          = 0;
+uint256 JrCreditorsPayable                          = 0;
+uint256 EquityPayable                               = 0;
+
+ 
+uint256 AdminFeesCumulPaid                          = 0;
+uint256 EmployeeSalariesCumulPaid                   = 0;
+uint256 GovtTaxesCumulPaid                          = 0;
+uint256 SrSecuredCreditorsCumulPaid                 = 0;
+uint256 BondholdersCumulPaid                        = 0;
+uint256 JrCreditorsCumulPaid                        = 0;
+uint256 EquityCumulPaid                             = 0;
+
+constructor() public{
+    owner = msg.sender;
+}
+
+
+receive() external payable {
+    emit LogReceipt(msg.sender, msg.value);
+}
+
+
+fallback() external payable {
+    revert();
+}
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 1200 - Imports and Modifiers
+//
+//====================================================================================================
+//====================================================================================================
+
+//import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/math/SafeMath.sol";
+//import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/math/Math.sol";
+// Note: I ran into version issues with Solidity - I was not able to import both libraries. 
+// Remix wanted pragma solicity ^0.5 for SafeMath and something else for Math. 
+
+modifier onlyOwner(address _address) { require(msg.sender == owner, "Only ContractOwner can make distributions."  ); _;}
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 1300 - Enums, Event Logs, and Structs
+//
+//====================================================================================================
+//====================================================================================================
+
+//enum Stage {"Admin", "EmpSal", "Taxes", "Seniors", "Bondholders", "Juniors"}
+
+
+//Events
+event LogStage(address stage);
+event LogReceipt(address sender, uint amt);
+event LogEvent(uint stage, string stagedesc, uint amount);
+
+//Struct#1: Receipts - i.e. Amounts received by the contract
+struct Receipt {
+    uint receiptNum; 
+    uint AmountReceived;
+    address payable ReceivedFrom;
+}
+uint numPmtsReceived = 0;
+mapping(uint256 => Receipt) public receipts;
+
+//Struct#2: Payments - i.e. Amounts paid out by the contract
+struct Distribution {
+    uint distNum; 
+    uint AmountPaid;
+    address payable SentTo;
+}
+uint numDistributions = 0;
+mapping(uint256 => Distribution) public distributions;
+
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 2000 - Calculate Waterfall Amounts
+//
+//====================================================================================================
+//====================================================================================================
+
+
+    function a_receivePmts() payable public {
+        AmtReceived                  = msg.value;
+        ThisReceipt                  = AmtReceived;
+        CumulativeReceivedBalance   += AmtReceived;
+        receipts[numPmtsReceived] = Receipt({receiptNum: numPmtsReceived, AmountReceived: AmtReceived, ReceivedFrom: msg.sender });
+        numPmtsReceived             += 1;
+        emit LogReceipt(msg.sender, msg.value);
+
+        //ProcessWaterfall
+        ProcessAdminFees();
+        ProcessEmployeeSalaries();
+        ProcessGovTaxes();
+        ProcessSrSecuredCreditors();
+        ProcessBondholders();
+        ProcessJrCreditorsAndEquity();
+    }
+
+    //Waterfall Level 1 - Admin Fees
+    function ProcessAdminFees() private {
+        AdminFeesPayable                     = min(AdminFeesPriorityDistributionAmt, AmtReceived); 
+        AdminFeesPriorityDistributionAmt    -= AdminFeesPayable; 
+        AmtReceived                         -= AdminFeesPayable;
+        if (AdminFeesPayable>0) {emit LogEvent(ThisReceipt, "Stage 1: Admin Fees Allocated", AdminFeesPayable);}
+    }
+
+    //Waterfall Level 2 - EmployeeSalaries
+    function ProcessEmployeeSalaries() private {
+        EmployeeSalariesPayable                      = min(EmployeeSalariesPriorityDistributionAmt, AmtReceived); 
+        EmployeeSalariesPriorityDistributionAmt     -= EmployeeSalariesPayable; 
+        AmtReceived                                 -= EmployeeSalariesPayable;
+        if (EmployeeSalariesPayable>0) {emit LogEvent(ThisReceipt, "Stage 2: EmployeeSalaries Allocated", EmployeeSalariesPayable);}
+    }
+
+    //Waterfall Level 3 - GovtTaxes
+    function ProcessGovTaxes() private {
+        GovtTaxesPayable                            = min(GovtTaxesPriorityDistributionAmt, AmtReceived); 
+        GovtTaxesPriorityDistributionAmt            -= GovtTaxesPayable; 
+        AmtReceived                                 -= GovtTaxesPayable;
+        if (GovtTaxesPayable>0) {emit LogEvent(ThisReceipt, "Stage 3; GovtTaxes Allocated", GovtTaxesPayable);}
+    }
+
+    //Waterfall Level 4 - SrSecuredCreditors
+    function ProcessSrSecuredCreditors() private {
+        SrSecuredCreditorsPayable                   = min(SrSecuredCreditorsPriorityDistributionAmt, AmtReceived); 
+        SrSecuredCreditorsPriorityDistributionAmt   -= SrSecuredCreditorsPayable; 
+        AmtReceived                                 -= SrSecuredCreditorsPayable;
+        if (SrSecuredCreditorsPayable>0) {emit LogEvent(ThisReceipt, "Stage 4: SeniorSecureds Allocated", SrSecuredCreditorsPayable);}
+    }
+
+    //Waterfall Level 5 - Bondholders
+    function ProcessBondholders() private {
+        BondholdersPayable                          = min(BondholdersPriorityDistributionAmt, AmtReceived); 
+        BondholdersPriorityDistributionAmt          -= BondholdersPayable; 
+        AmtReceived                                 -= BondholdersPayable;
+        if (BondholdersPayable>0) {emit LogEvent(ThisReceipt, "Stage 5: Bondholders Allocated", BondholdersPayable);}
+    }
+
+    //Waterfall Level 6 - Jr Creditors & Equity
+    function ProcessJrCreditorsAndEquity() private {
+        JrCreditorsPayable                          = AmtReceived * JrCreditorsShare/units; 
+        EquityPayable                               = AmtReceived * EquityShare/units; 
+        AmtReceived                                 -= JrCreditorsPayable;
+        AmtReceived                                 -= EquityPayable;
+        if (JrCreditorsPayable>0) {emit LogEvent(ThisReceipt, "Stage 6: JuniorCreditors Allocated", JrCreditorsPayable);}
+        if (EquityPayable>0) {emit LogEvent(ThisReceipt, "Stage 6: Equity Allocated", JrCreditorsPayable);}
+
+    }
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 3000 - Make Payouts
+//
+//====================================================================================================
+//====================================================================================================
+
+    function b_makeDistributions() payable public onlyOwner(msg.sender) {
+        if(AdminFeesPayable>0)                  {distributeToAdminFees();}
+        if(EmployeeSalariesPayable>0)           {distributeToEmployeeSalaries();}
+        if(GovtTaxesPayable>0)                  {distributeToGovtTaxes();}
+        if(SrSecuredCreditorsPayable>0)         {distributeToSrSecuredCreditors();}
+        if(BondholdersPayable>0)                {distributeToBondholders();}
+        if(JrCreditorsPayable>0)                {distributeToJrCreditors();}
+        if(EquityPayable>0)                     {distributeToEquity();}
+    }
+
+    function distributeToAdminFees() payable public {
+        CumulativePaidOutBalance    += AdminFeesPayable;
+        AdminFeesCumulPaid          += AdminFeesPayable;
+        distributePayments(AdminFeesPayable, AdminFees);
+
+        emit LogEvent(ThisReceipt, "Stage 1B: Admin Fees Paid", AdminFeesPayable);
+        AdminFeesPayable             = 0;
+    }
+
+    function distributeToEmployeeSalaries() payable public {
+        CumulativePaidOutBalance    += EmployeeSalariesPayable;
+        EmployeeSalariesCumulPaid   += EmployeeSalariesPayable;
+        distributePayments(EmployeeSalariesPayable, EmployeeSalaries);
+
+        emit LogEvent(ThisReceipt, "Stage 2B: EmployeeSalaries Paid", AdminFeesPayable);
+        EmployeeSalariesPayable      = 0;
+    }
+    function distributeToGovtTaxes() payable public {
+        CumulativePaidOutBalance    += GovtTaxesPayable;
+        GovtTaxesCumulPaid          += GovtTaxesPayable;
+        distributePayments(GovtTaxesPayable, GovtTaxes);
+
+        emit LogEvent(ThisReceipt, "Stage 3B: GovtTaxes Paid", AdminFeesPayable);
+        GovtTaxesPayable             = 0;
+    }
+    function distributeToSrSecuredCreditors() payable public {
+        CumulativePaidOutBalance    += SrSecuredCreditorsPayable;
+        SrSecuredCreditorsCumulPaid += SrSecuredCreditorsPayable;
+        distributePayments(SrSecuredCreditorsPayable, SrSecuredCreditors);
+
+        emit LogEvent(ThisReceipt, "Stage 4B: SeniorSecureds Paid", AdminFeesPayable);
+        SrSecuredCreditorsPayable    = 0;
+    }
+    function distributeToBondholders() payable public {
+        CumulativePaidOutBalance    += BondholdersPayable;
+        BondholdersCumulPaid        += BondholdersPayable;
+        distributePayments(BondholdersPayable, Bondholders);
+
+        emit LogEvent(ThisReceipt, "Stage 5B: Bondholders Paid", AdminFeesPayable);
+        BondholdersPayable           = 0;
+    }
+    function distributeToJrCreditors() payable public {
+        CumulativePaidOutBalance    += JrCreditorsPayable;
+        JrCreditorsCumulPaid        += JrCreditorsPayable;
+        distributePayments(JrCreditorsPayable, JrCreditors);
+
+        emit LogEvent(ThisReceipt, "Stage 6B: JuniorCreditors Paid", AdminFeesPayable);
+        JrCreditorsPayable           = 0;
+    }
+    function distributeToEquity() payable public {
+        CumulativePaidOutBalance    += EquityPayable;
+        EquityCumulPaid             += EquityPayable;
+        distributePayments(EquityPayable, Equity);
+
+        emit LogEvent(ThisReceipt, "Stage 7B: Equity Paid", AdminFeesPayable);
+        EquityPayable                = 0;
+    }
+
+    function distributePayments(uint256 Amt, address payable PartyToPay ) payable public {
+        PartyToPay.transfer(Amt);  
+        distributions[numDistributions] = Distribution({distNum: numDistributions, AmountPaid: Amt, SentTo: PartyToPay });
+        numDistributions             += 1;
+    }
+
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 8000 - Outputs
+//
+//====================================================================================================
+//====================================================================================================
+
+    function showContractMetrics() external view returns (string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("Contract balance:      ",uint2str(address(this).balance))), 
+            string(abi.encodePacked("CumulReceivedBal:      ",uint2str(CumulativeReceivedBalance))),
+            string(abi.encodePacked("CumulPaidOutBal:       ",uint2str(CumulativePaidOutBalance)))
+            );
+    } 
+    
+    function showOwedSrClaims() external view returns (string memory, string memory, string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("AdminFees PDA:      ",     uint2str(AdminFeesPriorityDistributionAmt))),
+            string(abi.encodePacked("EmployeeSal PDA:       ",  uint2str(EmployeeSalariesPriorityDistributionAmt))),
+            string(abi.encodePacked("GovTaxes PDA:       ",     uint2str(GovtTaxesPriorityDistributionAmt))),
+            string(abi.encodePacked("Sr Secd PDA:      ",       uint2str(SrSecuredCreditorsPriorityDistributionAmt))),
+            string(abi.encodePacked("Bondholders PDA:      ",   uint2str(BondholdersPriorityDistributionAmt)))
+            );
+    } 
+
+    function showSrPayables() external view returns (string memory, string memory, string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("AdminFees Payable:      ",     uint2str(AdminFeesPayable))),
+            string(abi.encodePacked("EmployeeSal Payable:       ",  uint2str(EmployeeSalariesPayable))),
+            string(abi.encodePacked("GovTaxes Payable:       ",     uint2str(GovtTaxesPayable))),
+            string(abi.encodePacked("Sr Secd Payable:      ",       uint2str(SrSecuredCreditorsPayable))),
+            string(abi.encodePacked("Bondholders Payable:      ",   uint2str(BondholdersPayable)))
+            );
+    } 
+
+    function showPaidSrClaims() external view returns (string memory, string memory, string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("AdminFees Paid:      ",     uint2str(AdminFeesCumulPaid))),
+            string(abi.encodePacked("EmployeeSal Paid:       ",  uint2str(EmployeeSalariesCumulPaid))),
+            string(abi.encodePacked("GovTaxes Paid:       ",     uint2str(GovtTaxesCumulPaid))),
+            string(abi.encodePacked("Sr Secd Paid:      ",       uint2str(SrSecuredCreditorsCumulPaid))),
+            string(abi.encodePacked("Bondholders Paid:      ",   uint2str(BondholdersCumulPaid)))
+            );
+    } 
+
+    function showJrCreditors() external view returns (string memory, string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("JrCreditorsPayable:       ",uint2str(JrCreditorsPayable))),
+            string(abi.encodePacked("JrCreditorsCumulPaid:       ",uint2str(JrCreditorsCumulPaid))),
+            string(abi.encodePacked("EquityPayable:       ",uint2str(EquityPayable))),
+            string(abi.encodePacked("EquityCumulPaid:       ",uint2str(EquityCumulPaid)))
+            );
+    } 
+
+    
+    
+//---------------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------
+//  9000 - Add Ins
+//---------------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------
+
+
+     //Returns the largest of two numbers.
+        function max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a >= b ? a : b;
+    }
+
+    //Returns the smallest of two numbers.
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    //converts numbers to strings:
+     function uint2str(uint _i) internal pure returns (string memory _uintAsString) {
+        if (_i == 0) {
+            return "0";
+        }
+        uint j = _i;
+        uint len;
+        while (j != 0) {
+            len++;
+            j /= 10;
+        }
+        bytes memory bstr = new bytes(len);
+        uint k = len - 1;
+        while (_i != 0) {
+            bstr[k--] = byte(uint8(48 + _i % 10));
+            _i /= 10;
+        }
+        return string(bstr);
+    }
+
+    //just a handy way to get addresses:
+    function z_contractOwner () public view returns (address){return owner;}
+    function z_whoami () public view returns (address){return msg.sender;}
+    function z_getContractAddress() public view returns (address) {return address(this);}
+
+}  
