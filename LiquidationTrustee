@@ -1,0 +1,242 @@
+
+  
+pragma solidity ^0.6.0;
+
+
+/* 
+This contract will receive funds from qualified Auction Agents. 
+Auciton Agents will qualify themselves by identifying themselves to 
+All funds received can only be transferred to the Distribution Trustee. 
+*/
+
+
+
+contract LiquidationTrustee {
+//====================================================================================================
+//====================================================================================================
+//
+// 1000 - Initial Setup
+//
+//====================================================================================================
+//====================================================================================================
+
+
+// 1. Global Variables
+address owner;
+uint256 CumulativeReceivedBalance                   = 0;
+uint256 CumulativePaidOutBalance                    = 0;
+uint256 AmtReceived                                 = 0; 
+uint256 ThisReceipt                                 = 0;
+
+
+// 1. The parties 
+address payable DistributionTrustee                 = 0xD75FBaf1f7ba9D12F412B6fcd664CE59086f0f1D;
+
+
+// 3. Other Overhead
+
+//initialize AP Accts with zero balances
+uint256 DT_Payable                                  = 0;
+uint256 DT_Paid                                     = 0;
+
+constructor() public{
+    owner = msg.sender;
+}
+
+
+receive() external payable {
+    emit LogReceipt(msg.sender, msg.value);
+}
+
+
+fallback() external payable {
+    revert();
+}
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 1200 - Imports and Modifiers
+//
+//====================================================================================================
+//====================================================================================================
+
+//import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v2.5.0/contracts/math/SafeMath.sol";
+//import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/math/Math.sol";
+// Note: I ran into version issues with Solidity - I was not able to import both libraries. 
+// Remix wanted pragma solicity ^0.5 for SafeMath and something else for Math. 
+
+modifier onlyOwner(address _address) { require(msg.sender == owner, "Only Distribution Trustee can transfer funds to the Liquidation Trustee."  ); _;}
+//modifier isRegistered(address _address) { require(msg.sender == owner, "The Liquidation Trustee only accepts funds from REGISTERED auction agents."  ); _;}
+// ==============================================================^^ This needs to be changed to registered auction agent
+
+modifier isRegistered(address _address) { require(enrolled[msg.sender], "The Liquidation Trustee only accepts funds from REGISTERED auction agents."  ); _;}
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 1300 - Enums, Event Logs, and Structs
+//
+//====================================================================================================
+//====================================================================================================
+
+
+//Events
+
+event LogRegistration(uint numAgentsRegistered, address addressOfAuctionAgent, string AgentName); 
+event LogStage(address stage);
+event LogReceipt(address sender, uint amt);
+event LogEvent(uint stage, string stagedesc, uint amount);
+
+
+
+//Struct#0: Registrations - i.e. Registrations of Auction Agents
+struct Agent {
+    uint  AgentsNum;
+    address AgentsAddress;
+    string AgentsName;
+}
+uint256 numAgentsRegistered = 0; 
+
+mapping(uint256 => Agent) public agents;
+mapping (address => bool) public enrolled;
+
+
+
+//Struct#1: Receipts - i.e. Amounts received by the contract
+struct Receipt {
+    uint receiptNum; 
+    uint AmountReceived;
+    address payable ReceivedFrom;
+}
+uint numPmtsReceived = 0;
+mapping(uint256 => Receipt) public receipts;
+
+//Struct#2: Payments - i.e. Amounts paid out by the contract
+struct Distribution {
+    uint distNum; 
+    uint AmountPaid;
+    address payable SentTo;
+}
+uint numDistributions = 0;
+mapping(uint256 => Distribution) public distributions;
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 2000 - Receive Payments from Qualified Auction Agents
+//
+//====================================================================================================
+//====================================================================================================
+
+
+    function registerAuctionAgent(string memory auctionAgentName) payable public {
+        agents[numAgentsRegistered]    = Agent({AgentsNum: numAgentsRegistered, AgentsAddress: msg.sender, AgentsName: auctionAgentName});
+        enrolled[msg.sender] = true;
+        emit LogRegistration(numAgentsRegistered, msg.sender, auctionAgentName);
+        numAgentsRegistered         += 1;
+    }
+
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 2400 - Receive Payments from Qualified Auction Agents
+//
+//====================================================================================================
+//====================================================================================================
+
+
+    function a_receivePmts() payable public  {
+//    function a_receivePmts() payable public isRegistered(msg.sender) {
+        AmtReceived                  = msg.value;
+        ThisReceipt                  = AmtReceived;
+        CumulativeReceivedBalance   += AmtReceived;
+        receipts[numPmtsReceived]    = Receipt({receiptNum: numPmtsReceived, AmountReceived: AmtReceived, ReceivedFrom: msg.sender });
+        numPmtsReceived             += 1;
+        emit LogReceipt(msg.sender, msg.value);
+    }
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 3000 - Make Payouts to Distribution Trustee
+//
+//====================================================================================================
+//====================================================================================================
+
+    function b_makeDistributions() payable public onlyOwner(msg.sender) {
+        if(DT_Payable>0)                        {distributeToDistributionTrustee();}
+    }
+
+    function distributeToDistributionTrustee() payable public {
+        CumulativePaidOutBalance    += DT_Payable;
+        distributePayments(DT_Payable, DistributionTrustee);
+
+        emit LogEvent(ThisReceipt, "Payments to Distribution Trustee", DT_Payable);
+        DT_Payable                  = 0;
+    }
+
+
+    function distributePayments(uint256 Amt, address payable PartyToPay ) payable public {
+        PartyToPay.transfer(Amt);  
+        distributions[numDistributions] = Distribution({distNum: numDistributions, AmountPaid: Amt, SentTo: PartyToPay });
+        numDistributions             += 1;
+    }
+
+
+//====================================================================================================
+//====================================================================================================
+//
+// 8000 - Outputs
+//
+//====================================================================================================
+//====================================================================================================
+
+    function showContractMetrics() external view returns (string memory, string memory, string memory) {
+        return (
+            string(abi.encodePacked("Contract balance:      ",uint2str(address(this).balance))), 
+            string(abi.encodePacked("CumulReceivedBal:      ",uint2str(CumulativeReceivedBalance))),
+            string(abi.encodePacked("CumulPaidOutBal:       ",uint2str(CumulativePaidOutBalance)))
+            );
+    } 
+
+//---------------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------
+//  9000 - Add Ins
+//---------------------------------------------------------------------------------------------
+//---------------------------------------------------------------------------------------------
+
+    //converts numbers to strings:
+     function uint2str(uint _i) internal pure returns (string memory _uintAsString) {
+        if (_i == 0) {
+            return "0";
+        }
+        uint j = _i;
+        uint len;
+        while (j != 0) {
+            len++;
+            j /= 10;
+        }
+        bytes memory bstr = new bytes(len);
+        uint k = len - 1;
+        while (_i != 0) {
+            bstr[k--] = byte(uint8(48 + _i % 10));
+            _i /= 10;
+        }
+        return string(bstr);
+    }
+
+    //just a handy way to get addresses:
+//    function z_contractOwner () public view returns (address){return owner;}
+//    function z_whoami () public view returns (address){return msg.sender;}
+//    function z_getContractAddress() public view returns (address) {return address(this);}
+
+}  
