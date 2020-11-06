@@ -1,6 +1,4 @@
-# Gigante
-
-Gigante Rental Cars Liquidation and Distribution Summary 
+# Gigante Rental Cars Liquidation and Distribution Summary 
 
 Gigante is the largest rental car company in South America, with multiple offices spread across many Latin American countries. Unfortunately, a series of misfortunes has caused Gigante to enter bankruptcy.  Since credit is not available for a restructuring the court has accepted the liquidation plan submitted by the creditors. 
 
@@ -15,7 +13,7 @@ The liquidation process is expected to take several months. Proceeds from liquid
 
 
 
-Liquidation Trustee
+## Liquidation Trustee
 
 
 
@@ -25,7 +23,7 @@ The LT has hired Auction Agents in multiple countries to run auctions of Gigante
 
 
 
-Distribution Trustee
+## Distribution Trustee
 
 
 The Distribution Trustee will handle making payments to each class of creditors. Funds will be transferred from the Distribution Trustee to one of six subsidiary smart contracts for further disbursement among the individual creditors. 
@@ -40,12 +38,12 @@ The Junior Creditors and the equity have agreed to split any remainder on a 60/4
 
 
 
-Implementation Mechanics
+## Implementation Mechanics
 
 
 The Bankruptcy Court and the Trustee agree on the importance of transparency in the liquidation and distribution process. To that end, they have engaged BlockHeads LLC to implement the appropriate smart contracts and business processes to ensure the efficient resolution of this matter.  
 
-Step 1 - Enable Receipt of Funds 
+### Step 1 - Enable Receipt of Funds 
 Accept registration of Auction Agents
 Accept receiving of funds only from registered auction agents
 Emit events when funds are received
@@ -54,13 +52,13 @@ Ensure that funds flow out
 Automatically =OR=
 When the Liquidation Trustee approves distributions. 
 
-Step 2 - Enable Distribution of Funds 
+### Step 2 - Enable Distribution of Funds 
 Ensure that funds flow out based on priority
 Ensure that funds flow out 
 Automatically =OR=
 When the Distribution Trustee approves distributions. 
 
-Step 3 - Enable Transfer of funds from Liquidation Trustee to Distribution Trustee
+### Step 3 - Enable Transfer of funds from Liquidation Trustee to Distribution Trustee
 Ideally, these are two completely separate smart contracts. 
 
 
